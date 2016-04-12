@@ -491,7 +491,12 @@ int Spark_Handshake(void)
 
 bool Spark_Communication_Loop(void)
 {
-    return spark_protocol_event_loop(sp);
+    bool result = true;
+    do {
+        result = spark_protocol_event_loop(sp);
+    } while (socket_bytes_available(sparkSocket) > 0 && result);
+
+    return result;
 }
 
 /* This function MUST NOT BlOCK!

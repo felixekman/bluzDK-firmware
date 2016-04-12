@@ -31,6 +31,7 @@
 #include "ble_conn_params.h"
 #include "ble_hci.h"
 #include "custom_data_service.h"
+#include "nrf_drv_wdt.h"
 
 uint32_t NbrOfPage = 0;
 uint16_t Flash_Update_Index = 0;
@@ -39,13 +40,12 @@ uint32_t External_Flash_Start_Address = 0;
 
 uint32_t system_millis(void)
 {
-//    return system_milliseconds;
-    return (( ((RTC_OVERFLOW_COUNT << 24) | NRF_RTC1->COUNTER) * 1.0 ) / (APP_TIMER_CLOCK_FREQ * 1.0)) * 1000.0;
+    return (( (((uint64_t)RTC_OVERFLOW_COUNT << 24) | (uint64_t)NRF_RTC1->COUNTER) * 1.0 ) / (APP_TIMER_CLOCK_FREQ * 1.0)) * 1000.0;
 }
 
 uint32_t system_micros(void)
 {
-    return (( ((RTC_OVERFLOW_COUNT << 24) | NRF_RTC1->COUNTER) * 1.0 ) / (APP_TIMER_CLOCK_FREQ * 1.0)) * 1000000.0;
+    return (( (((uint64_t)RTC_OVERFLOW_COUNT << 24) | (uint64_t)NRF_RTC1->COUNTER) * 1.0 ) / (APP_TIMER_CLOCK_FREQ * 1.0)) * 1000000.0;
 }
 
 /**@brief Function for error handling, which is called when an error has occurred.
@@ -280,6 +280,22 @@ void scheduler_init(void)
     APP_SCHED_INIT(SCHED_MAX_EVENT_DATA_SIZE, SCHED_QUEUE_SIZE);
 }
 
+void wdt_init(void)
+{
+    //Configure WDT.
+    nrf_drv_wdt_config_t config = NRF_DRV_WDT_DEAFULT_CONFIG;
+    uint32_t err_code = nrf_drv_wdt_init(&config, wdt_event_handler);
+    APP_ERROR_CHECK(err_code);
+    err_code = nrf_drv_wdt_channel_alloc(&m_channel_id);
+    APP_ERROR_CHECK(err_code);
+    nrf_drv_wdt_enable();
+}
+
+void wtd_feed(void)
+{
+    nrf_drv_wdt_channel_feed(m_channel_id);
+}
+
 /**@brief Function for the Device Manager initialization.
  */
 void device_manager_init(void)
@@ -398,6 +414,10 @@ void register_data_callback(void (*data_callback)(uint8_t *data, uint16_t length
     customDataServiceRegisterCallback(data_callback);
 }
 
+void send_data(uint8_t *data, uint16_t length)
+{
+    customDataServiceSendData(data, length);
+}
 
 /**@brief Function for initializing the BLE stack.
  *
