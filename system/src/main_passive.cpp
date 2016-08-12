@@ -55,6 +55,7 @@
 volatile uint16_t ledOffTime = 2000, ledOnTime = 200;
 static volatile uint32_t TimingLED;
 static volatile uint32_t TimingIWDGReload;
+static volatile uint32_t SystemSecondsTick;
 static bool CLOUD_CONNECTED = false;
 uint32_t on_mseconds = ledOnTime, off_mseconds = ledOnTime+ledOffTime;
 uint16_t cloudErrors = 0;
@@ -88,6 +89,18 @@ extern "C" void HAL_SysTick_Handler(void) {
         TimingIWDGReload+=HAL_Get_Sys_Tick_Interval();
     }
 
+    //tick the system seconds (separate from millis() so it won't roll over after 49 days)
+    if (SystemSecondsTick >= 1000)
+    {
+        SystemSecondsTick = 0;
+        /* Reload WDG counter */
+        HAL_Tick_System_Seconds();
+    }
+    else
+    {
+        SystemSecondsTick+=HAL_Get_Sys_Tick_Interval();
+    }
+
     //check on system updates and reset if necessary
     if(SPARK_FLASH_UPDATE)
     {
@@ -101,6 +114,7 @@ extern "C" void HAL_SysTick_Handler(void) {
             TimingFlashUpdateTimeout+=HAL_Get_Sys_Tick_Interval();
         }
     }
+
 
 }
 
@@ -117,6 +131,17 @@ void system_part1_post_init()
 {
 }
 
+void platform_event_callback(uint8_t event, uint8_t *data, uint16_t length)
+{
+    //set mode function
+    if (event == 1) {
+        if (length == 1 && data[0] == 1) {
+            set_system_mode(MANUAL);
+        } else {
+            set_system_mode(AUTOMATIC);
+        }
+    }
+}
 
 /*******************************************************************************
  * Function Name  : main.
@@ -128,11 +153,15 @@ void system_part1_post_init()
 void app_setup_and_loop_passive(void)
 {
     system_part1_post_init();
+
+    // Register for events that may come from the platform
+    HAL_Register_Platform_Events(platform_event_callback);
     
     //Set some Particle flags to bypass functionality we don't need
     SPARK_CLOUD_SOCKETED = 0;
     SPARK_CLOUD_CONNECTED = 0;
-    
+    HAL_Set_Cloud_Connection(false);
+
     //setup all peripherals
     HAL_Core_Init();
     
@@ -143,19 +172,21 @@ void app_setup_and_loop_passive(void)
     //setup BLE stack
     HAL_Network_Init();
     
-    LED_SetRGBColor(system_mode()==SAFE_MODE ? RGB_COLOR_MAGENTA : RGB_COLOR_GREEN);
+    LED_SetRGBColor(system_mode()==SAFE_MODE ? RGB_COLOR_YELLOW : RGB_COLOR_GREEN);
     LED_On(LED_RGB);
-    
+
+    //initialize the spark protocol
+    Spark_Protocol_Init();
+
     //call user setup function, device may or may not be connected
     if (system_mode()!=SAFE_MODE) {
         setup();
     }
-    
-//    Spark_Protocol_Init();
+
     while (1)
     {
         DECLARE_SYS_HEALTH(ENTERED_WLAN_Loop);
-        
+
         //Execute user application loop
         DECLARE_SYS_HEALTH(ENTERED_Loop);
         if (system_mode()!=SAFE_MODE && !SPARK_FLASH_UPDATE) {
@@ -164,47 +195,51 @@ void app_setup_and_loop_passive(void)
             DECLARE_SYS_HEALTH(RAN_Loop);
 //            DEBUG("Exited User Loop");
         }
+
+        if (!SPARK_FLASH_UPDATE) {
+            HAL_Loop_Iteration();
+        }
         
         //we may not be connected. if not, don't try to manage anything cloud related
         if (system_mode()!=MANUAL) {
             if (HAL_Network_Connection()) {
                 if (CLOUD_CONNECTED) {
-//                DEBUG("Calling Spark Comm Loop");
-//                Spark_Process_Events();
+//                  DEBUG("Calling Spark Comm Loop");
+//                  Spark_Process_Events();
                     if (!Spark_Communication_Loop()) {
                         cloudErrors++;
                         ERROR("Error when calling Spark Comm Loop");
                         if (cloudErrors > 2) {
-                            cloudErrors = 0;
-                            HAL_Handle_Cloud_Disconnect();
+                          cloudErrors = 0;
+                          HAL_Handle_Cloud_Disconnect();
                         }
                     }
                 } else {
                     ledOffTime = 250;
                     HAL_Delay_Milliseconds(2000);
                     DEBUG("Calling Spark Connect");
-                    int err_code = Spark_Connect();
+                    int err_code = spark_cloud_socket_connect();
                     if (err_code) {
                         ERROR("Error when calling Spark Connect");
                     }
                     SPARK_CLOUD_SOCKETED = 1;
 
                     HAL_Delay_Milliseconds(2000);
-                    Spark_Protocol_Init();
                     DEBUG("Calling Spark Handshake");
-                    err_code = Spark_Handshake();
+                    err_code = Spark_Handshake(false);
                     if (err_code) {
-                        LED_SetRGBColor(RGB_COLOR_MAGENTA);
                         ERROR("Error when calling Spark Handshake");
                         SPARK_CLOUD_SOCKETED = 0;
+                        ledOffTime = 2000;
                         HAL_Handle_Cloud_Disconnect();
                     } else {
-                        LED_SetRGBColor(system_mode() == SAFE_MODE ? RGB_COLOR_MAGENTA : RGB_COLOR_CYAN);
+                        LED_SetRGBColor(system_mode()==SAFE_MODE ? RGB_COLOR_YELLOW : RGB_COLOR_CYAN);
                         DEBUG("Handshake Complete");
 
                         CLOUD_CONNECTED = true;
                         SPARK_CLOUD_CONNECTED = 1;
                         ledOffTime = 2000;
+                        HAL_Set_Cloud_Connection(true);
                     }
                 }
             } else {
@@ -215,9 +250,10 @@ void app_setup_and_loop_passive(void)
 
                     SPARK_CLOUD_SOCKETED = 0;
                     SPARK_CLOUD_CONNECTED = 0;
+                    HAL_Set_Cloud_Connection(false);
 
                     ledOffTime = 2000;
-                    LED_SetRGBColor(system_mode() == SAFE_MODE ? RGB_COLOR_MAGENTA : RGB_COLOR_GREEN);
+                    LED_SetRGBColor(system_mode()==SAFE_MODE ? RGB_COLOR_YELLOW : RGB_COLOR_GREEN);
 
                 }
                 if (!HAL_Is_Advertising()) {
@@ -225,7 +261,7 @@ void app_setup_and_loop_passive(void)
                     LED_SetRGBColor(RGB_COLOR_BLUE);
                 } else {
                     ledOffTime = 2000;
-//                LED_SetRGBColor(RGB_COLOR_GREEN);
+    //                LED_SetRGBColor(RGB_COLOR_GREEN);
                 }
             }
         } else {

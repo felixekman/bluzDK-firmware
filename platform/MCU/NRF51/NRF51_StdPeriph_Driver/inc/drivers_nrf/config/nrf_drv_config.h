@@ -45,7 +45,7 @@
 #if (GPIOTE_ENABLED == 1)
 #define GPIOTE_CONFIG_USE_SWI_EGU false
 #define GPIOTE_CONFIG_IRQ_PRIORITY APP_IRQ_PRIORITY_HIGH
-#define GPIOTE_CONFIG_NUM_OF_LOW_POWER_EVENTS 1
+#define GPIOTE_CONFIG_NUM_OF_LOW_POWER_EVENTS 6
 #endif
 
 /* TIMER */
@@ -118,7 +118,7 @@
 #endif
 
 /* TWI */
-#define TWI0_ENABLED 1
+#define TWI0_ENABLED 0
 
 #if (TWI0_ENABLED == 1)
 #define TWI0_CONFIG_FREQUENCY    NRF_TWI_FREQ_100K
@@ -129,14 +129,20 @@
 #define TWI0_INSTANCE_INDEX      0
 #endif
 
+//Only enable TWI1 on bluz, not the gateway, which requires this peripheral for SPI Slave
+#if PLATFORM_ID==103
+#define TWI1_ENABLED 1
+#else 
 #define TWI1_ENABLED 0
+#endif
+
 #if (TWI1_ENABLED == 1)
 #define TWI1_CONFIG_FREQUENCY NRF_TWI_FREQ_100K
-#define TWI1_CONFIG_SDA  0
-#define TWI1_CONFIG_SCL  1
+#define TWI1_CONFIG_SDA  21
+#define TWI1_CONFIG_SCL  22
 #define TWI1_CONFIG_IRQ_PRIORITY APP_IRQ_PRIORITY_LOW
 
-#define TWI1_INSTANCE_INDEX      (TWI0_ENABLED)
+#define TWI1_INSTANCE_INDEX      0
 #endif
 
 #define TWI_COUNT                (TWI0_ENABLED+TWI1_ENABLED)

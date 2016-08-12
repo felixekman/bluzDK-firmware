@@ -31,12 +31,36 @@
 #include "ble_conn_params.h"
 #include "ble_hci.h"
 #include "custom_data_service.h"
+#include "info_data_service.h"
 #include "nrf_drv_wdt.h"
+#include "client_handling.h"
+#include "app_timer.h"
 
 uint32_t NbrOfPage = 0;
 uint16_t Flash_Update_Index = 0;
 uint32_t External_Flash_Address = 0;
 uint32_t External_Flash_Start_Address = 0;
+
+static void blink_led(int count)
+{
+    for (int i = 0; i < count; i++) {
+        nrf_gpio_pin_set(0);
+        nrf_delay_us(250000);
+        nrf_gpio_pin_clear(0);
+        nrf_delay_us(250000);
+    }
+    nrf_delay_us(500000);
+}
+
+void tick_system_seconds(void)
+{
+    system_seconds++;
+}
+
+uint32_t get_system_seconds(void)
+{
+    return system_seconds;
+}
 
 uint32_t system_millis(void)
 {
@@ -62,6 +86,12 @@ void app_error_handler(uint32_t error_code, uint32_t line_num, const uint8_t * p
     DEBUG("Hit an app error of code %d", error_code);
     DEBUG("Error happened on line number %d in file %s", line_num, p_file_name);
     LED_SetRGBColor(RGB_COLOR_RED);
+
+    nrf_drv_wdt_channel_feed(m_channel_id);
+    //this will stop all timers, so we need to feed the WDT here
+    for (int i=0; i<APP_TIMER_MAX_TIMERS; i++) app_timer_stop(i);
+
+    nrf_gpio_pin_set(0);
     for (int count = 0; count < 2; count++) {
         //SOS Call
         for (int i = 0; i < 3; i++) {
@@ -69,6 +99,7 @@ void app_error_handler(uint32_t error_code, uint32_t line_num, const uint8_t * p
             nrf_delay_ms(100);
             LED_Off(LED_RGB);
             nrf_delay_ms(100);
+            nrf_drv_wdt_channel_feed(m_channel_id);
         }
         nrf_delay_ms(250);
         for (int i = 0; i < 3; i++) {
@@ -76,6 +107,7 @@ void app_error_handler(uint32_t error_code, uint32_t line_num, const uint8_t * p
             nrf_delay_ms(250);
             LED_Off(LED_RGB);
             nrf_delay_ms(250);
+            nrf_drv_wdt_channel_feed(m_channel_id);
         }
         nrf_delay_ms(250);
         for (int i = 0; i < 3; i++) {
@@ -83,6 +115,7 @@ void app_error_handler(uint32_t error_code, uint32_t line_num, const uint8_t * p
             nrf_delay_ms(100);
             LED_Off(LED_RGB);
             nrf_delay_ms(100);
+            nrf_drv_wdt_channel_feed(m_channel_id);
         }
         nrf_delay_ms(1000);
         for (int i = 0; i < error_code; i++) {
@@ -90,8 +123,10 @@ void app_error_handler(uint32_t error_code, uint32_t line_num, const uint8_t * p
             nrf_delay_ms(250);
             LED_Off(LED_RGB);
             nrf_delay_ms(250);
+            nrf_drv_wdt_channel_feed(m_channel_id);
         }
-        nrf_delay_ms(3000);
+        nrf_delay_ms(2000);
+        nrf_drv_wdt_channel_feed(m_channel_id);
     }
     
     
@@ -104,7 +139,7 @@ uint32_t OTA_FlashAddress()
     return FLASH_FW_ADDRESS;
 }
 
-#define FLASH_MAX_SIZE          (int32_t)(FLASH_LENGTH - FLASH_FW_ADDRESS)
+#define FLASH_MAX_SIZE          (int32_t)(FLASH_STORAGE_ADDRESS - FLASH_FW_ADDRESS)
 
 uint32_t OTA_FlashLength()
 {
@@ -123,6 +158,12 @@ void FLASH_Begin(uint32_t sFLASH_Address, uint32_t fileSize)
 {
     //OTA_FLASHED_Status_SysFlag = 0x0000;
     //Save_SystemFlags();
+    for (int i=1; i<APP_TIMER_MAX_TIMERS; i++) app_timer_stop(i);
+
+#if PLATFORM_ID==269
+    disconnect_all_peripherals();
+#endif
+    isCloudUpdating = true;
 
     Flash_Update_Index = 0;
     External_Flash_Start_Address = sFLASH_Address;
@@ -179,7 +220,6 @@ uint16_t FLASH_Update(const uint8_t *pBuffer, uint32_t address, uint32_t bufferS
         sFLASH_EraseSector(External_Flash_Address);
         Flash_Update_Index = (uint16_t)((External_Flash_Address - External_Flash_Start_Address) / bufferSize);
     }
-
     return Flash_Update_Index;
 }
 
@@ -226,11 +266,14 @@ void leds_init(void)
     nrf_gpio_pin_set(RGB_LED_PIN_RED);
     nrf_gpio_pin_set(RGB_LED_PIN_GREEN);
     nrf_gpio_pin_set(RGB_LED_PIN_BLUE);
+
+    nrf_gpio_cfg_output(0);
+    nrf_gpio_pin_clear(0);
 }
 void timers_init(void)
 {
       uint32_t err_code;
-    // Initialize timer module, making it use the scheduler
+    // Initialize timer module, making it NOT use the scheduler
     APP_TIMER_INIT(APP_TIMER_PRESCALER, APP_TIMER_MAX_TIMERS, APP_TIMER_OP_QUEUE_SIZE, false);
     err_code = app_timer_create(&millis_timer, APP_TIMER_MODE_REPEATED, millis_timer_timeout);
     APP_ERROR_CHECK(err_code);
@@ -309,12 +352,10 @@ void device_manager_init(void)
     err_code = dm_handle_initialize(&m_bonded_peer_handle);
     APP_ERROR_CHECK(err_code);
     //blink(1);
-    
     // Initialize persistent storage module.
     err_code = pstorage_init();
     APP_ERROR_CHECK(err_code);
     //blink(2);
-    
     // Clear all bonded centrals if the "delete all bonds" button is pushed.
     //SO STUPID! Youmust hand the index of the button from the Init call data structure, not just the pin number
     //It is 8 by the way
@@ -322,11 +363,10 @@ void device_manager_init(void)
 //    APP_ERROR_CHECK(err_code);
     //    blink(3);
     init_data.clear_persistent_data = bonds_delete;
-    
+
     err_code = dm_init(&init_data);
     APP_ERROR_CHECK(err_code);
     //blink(4);
-    
     memset(&register_param.sec_param, 0, sizeof(ble_gap_sec_params_t));
     
     register_param.sec_param.bond         = SEC_PARAM_BOND;
@@ -336,11 +376,26 @@ void device_manager_init(void)
     register_param.sec_param.min_key_size = SEC_PARAM_MIN_KEY_SIZE;
     register_param.sec_param.max_key_size = SEC_PARAM_MAX_KEY_SIZE;
     register_param.evt_handler            = device_manager_evt_handler;
+
+    //platofrm specific settings
+#if PLATFORM_ID==103
+    //bluz
     register_param.service_type           = DM_PROTOCOL_CNTXT_GATT_SRVR_ID;
+#endif
+#if PLATFORM_ID==269
+    //bluz-gw
+    register_param.service_type           = DM_PROTOCOL_CNTXT_GATT_CLI_ID;
+#endif
     
     err_code = dm_register(&m_app_handle, &register_param);
     //blink(5);
     APP_ERROR_CHECK(err_code);
+}
+
+char* DEVICE_NAME = "Bluz DK";
+void set_advertised_name(char* name)
+{
+    DEVICE_NAME = name;
 }
 
 /**@brief Function for the GAP initialization.
@@ -355,7 +410,7 @@ void gap_params_init(void)
     ble_gap_conn_sec_mode_t sec_mode;
     
     BLE_GAP_CONN_SEC_MODE_SET_OPEN(&sec_mode);
-    
+
     err_code = sd_ble_gap_device_name_set(&sec_mode,
                                           (const uint8_t *)DEVICE_NAME,
                                           strlen(DEVICE_NAME));
@@ -414,9 +469,35 @@ void register_data_callback(void (*data_callback)(uint8_t *data, uint16_t length
     customDataServiceRegisterCallback(data_callback);
 }
 
+void register_event_callback(void (*event_callback)(uint8_t event, uint8_t *data, uint16_t length))
+{
+    infoDataServiceRegisterCallback(event_callback);
+}
+
 void send_data(uint8_t *data, uint16_t length)
 {
     customDataServiceSendData(data, length);
+}
+
+void setTxPower(int power)
+{
+    sd_ble_gap_tx_power_set(power);
+}
+
+void setConnParameters(int minimum, int maximum)
+{
+    ble_disconnect();
+    int err_code;
+    ble_gap_conn_params_t   gap_conn_params;
+    memset(&gap_conn_params, 0, sizeof(gap_conn_params));
+
+    gap_conn_params.min_conn_interval = MSEC_TO_UNITS(minimum, UNIT_1_25_MS);
+    gap_conn_params.max_conn_interval = MSEC_TO_UNITS(maximum, UNIT_1_25_MS);
+    gap_conn_params.slave_latency     = SLAVE_LATENCY;
+    gap_conn_params.conn_sup_timeout  = CONN_SUP_TIMEOUT;
+
+    err_code = sd_ble_gap_ppcp_set(&gap_conn_params);
+    APP_ERROR_CHECK(err_code);
 }
 
 /**@brief Function for initializing the BLE stack.
@@ -427,22 +508,22 @@ void ble_stack_init(void)
 {
     //Need a new init procedure for SD7
     uint32_t err_code;
-    
+
     // Initialize the SoftDevice handler module.
     SOFTDEVICE_HANDLER_INIT(NRF_CLOCK_LFCLKSRC_XTAL_20_PPM, false);
-    
+
     // Enable BLE stack
-    
+
     ble_enable_params_t ble_enable_params;
     memset(&ble_enable_params, 0, sizeof(ble_enable_params));
     ble_enable_params.gatts_enable_params.service_changed = IS_SRVC_CHANGED_CHARACT_PRESENT;
     err_code = sd_ble_enable(&ble_enable_params);
     APP_ERROR_CHECK(err_code);
-    
+
     // Register with the SoftDevice handler module for BLE events.
     err_code = softdevice_ble_evt_handler_set(ble_evt_dispatch);
     APP_ERROR_CHECK(err_code);
-    
+
     // Register with the SoftDevice handler module for BLE events.
     err_code = softdevice_sys_evt_handler_set(sys_evt_dispatch);
     APP_ERROR_CHECK(err_code);
@@ -533,6 +614,11 @@ void ble_disconnect(void)
     }
 }
 
+void set_cloud_connection_state(bool connected)
+{
+    isCloudConnected = connected;
+}
+
 /**@brief Function for the Power manager.
  */
 void power_manage(void)
@@ -549,6 +635,14 @@ void power_manage(void)
 //    APP_ERROR_CHECK(err_code);
 }
 
+void shutdown(void)
+{
+    nrf_drv_wdt_channel_feed(m_channel_id);
+    //this will stop all timers, so we need to feed the WDT here
+    for (int i=0; i<APP_TIMER_MAX_TIMERS; i++) app_timer_stop(i);
+    LED_Off(LED_RGB);
+    sd_power_system_off();
+}
 
 void FLASH_WriteProtection_Enable(uint32_t FLASH_Sectors)
 {

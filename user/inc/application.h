@@ -41,6 +41,7 @@
 #include "spark_wiring_fuel.h"  
 #include "spark_wiring_print.h"
 #include "spark_wiring_usartserial.h"
+#include "spark_wiring_can.h"
 #include "spark_wiring_usbserial.h"
 #include "spark_wiring_usbmouse.h"
 #include "spark_wiring_usbkeyboard.h"
@@ -51,7 +52,13 @@
 #include "spark_wiring_network.h"
 #include "spark_wiring_client.h"
 #include "spark_wiring_startup.h"
+
+#if PLATFORM_ID==103 // bluzDK
+#include "bluz_wiring_timer.h"
+#else
 #include "spark_wiring_timer.h"
+#endif
+
 #include "spark_wiring_tcpclient.h"
 #include "spark_wiring_tcpserver.h"
 #include "spark_wiring_udp.h"
@@ -59,6 +66,7 @@
 #include "spark_wiring_tone.h"
 #include "spark_wiring_eeprom.h"
 #include "spark_wiring_version.h"
+#include "spark_wiring_watchdog.h"
 #include "spark_wiring_thread.h"
 #include "spark_wiring_bluetooth_le.h"
 #include "fast_pin.h"
